@@ -91,3 +91,23 @@ COOKIES_ENABLED = True
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 FEED_EXPORT_ENCODING = "utf-8"
+
+# Export CSV columns in this specific order
+FEED_EXPORT_FIELDS = [
+	"author",
+	"content",
+	"keyword",
+	"link",
+	"publish_date",
+	"source",
+	"title",
+]
+
+# Enable scrapy-playwright download handler so pages can be rendered if needed
+DOWNLOAD_HANDLERS = {
+	"http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+	"https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+}
+
+# Playwright options (headless by default)
+PLAYWRIGHT_LAUNCH_OPTIONS = {"headless": True}

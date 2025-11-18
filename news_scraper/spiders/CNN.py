@@ -4,6 +4,7 @@ import random
 
 
 from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
 
 class CnnSpider(scrapy.Spider):
@@ -25,14 +26,21 @@ class CnnSpider(scrapy.Spider):
         return "Chrome/103.0.5060.129 Mobile Safari/537.36" + str(random.randint(1,100))
 
     def start_requests(self):
-        keywords = self.keyword.split(",")
+        keywords = getattr(self, "keyword", "").split(",") if getattr(self, "keyword", None) else []
+        if not keywords:
+            self.logger.warning("No keyword provided to CNN spider; nothing to crawl.")
+            return
+
         for keyword in keywords:
-            # for cnn
+            keyword = keyword.strip()
+            if not keyword:
+                continue
+            q = quote_plus(keyword)
+            # for cnn - encode the query to ensure spaces/special chars are safe
+            url = f"https://www.cnnindonesia.com/api/v2/search?query={q}&start=0&limit=10"
             yield scrapy.Request(
-                url=f"https://www.cnnindonesia.com/api/v2/search?query={keyword}&start=0&limit=10",
-                headers={
-                      'user-agent':self.generateUserAgent(),
-                    },
+                url=url,
+                headers={"user-agent": self.generateUserAgent()},
                 callback=self.parse_search,
                 meta={"keyword": keyword, "source": "cnnindonesia.com"},
             )
@@ -40,27 +48,39 @@ class CnnSpider(scrapy.Spider):
     def parse_search(self, response):
         start = int(response.meta.get("start", 0))
 
-        data = response.json()
-        if "not found" in data["message"]:
+        try:
+            data = response.json()
+        except Exception as e:
+            self.logger.exception("Failed to parse JSON from CNN API for %s: %s", response.url, e)
             return
 
-        if len(data["data"]) > 0:
-            response.meta["start"] = start + 10
-            yield scrapy.Request(
-                url=f"https://www.cnnindonesia.com/api/v2/search?query={response.meta['keyword']}&start={response.meta['start']}&limit=10",
-                callback=self.parse_search,
-                headers={
-                      'user-agent':self.generateUserAgent(),
-                    },
-                meta=response.meta,
-            )
+        # debug log to see what the API returned
+        items = data.get("data") or []
+        message = data.get("message")
+        self.logger.debug("CNN parse_search: keyword=%r start=%s returned %d items message=%r", response.meta.get("keyword"), start, len(items), message)
 
-        for article in data["data"]:
+        if not items:
+            return
+
+        # schedule next page if present
+        response.meta["start"] = start + 10
+        q = quote_plus(response.meta.get("keyword"))
+        next_url = f"https://www.cnnindonesia.com/api/v2/search?query={q}&start={response.meta['start']}&limit=10"
+        yield scrapy.Request(
+            url=next_url,
+            callback=self.parse_search,
+            headers={"user-agent": self.generateUserAgent()},
+            meta=response.meta,
+        )
+
+        for article in items:
+            # article may not have a valid url; guard for it
+            url = article.get("url")
+            if not url:
+                continue
             yield scrapy.Request(
-                url=article["url"],
-                headers={
-                      'user-agent':self.generateUserAgent(),
-                    },
+                url=url,
+                headers={"user-agent": self.generateUserAgent()},
                 callback=self.parse,
                 meta=response.meta,
             )

@@ -11,6 +11,13 @@ scrapy = "^2.11.2"
 dateparser = "^1.2.0"
 bs4 = "^0.0.2"
 scrapy-useragents = "^0.0.1"
+scrapy-playwright = "^0.0.44"
+playwright = "^1.55.0"
+geopy = "^2.4.1"
+tqdm = "^4.67.1"
+geopandas = "^1.1.1"
+scikit-learn = "^1.7.2"
+google-generativeai = "^0.8.5"
 
 
 [build-system]
