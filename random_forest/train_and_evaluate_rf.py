@@ -1,6 +1,5 @@
-import os
 import pandas as pd
-import re
+import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -8,48 +7,9 @@ from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-DATA_DIR = '../final_data'
+LABELLED_PATH = './output_rf/labelled_final_data.csv'
 OUTPUT_DIR = './output_rf'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def list_data_files(data_dir):
-    return [f for f in os.listdir(data_dir) if f.startswith('filtered_processed_') and f.endswith('.csv')]
-
-def preprocess_text(text):
-    if pd.isnull(text):
-        return ''
-    text = text.lower()
-    text = re.sub(r'[^a-zA-Z\s]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def load_and_prepare_data(data_dir):
-    files = list_data_files(data_dir)
-    dfs = []
-    for file in files:
-        path = os.path.join(data_dir, file)
-        try:
-            df = pd.read_csv(path)
-            if 'cleaned_content' in df.columns and 'is_valid' in df.columns:
-                df = df[df['is_valid'] == True]
-                df = df.dropna(subset=['cleaned_content'])
-                df['cleaned_content'] = df['cleaned_content'].apply(preprocess_text)
-                dfs.append(df)
-        except Exception as e:
-            print(f"Failed to load {file}: {e}")
-    if dfs:
-        return pd.concat(dfs, ignore_index=True)
-    return pd.DataFrame()
-
-def label_sentiment_rule_based(text):
-    if 'ancaman' in text or 'bahaya' in text or 'waspada' in text or 'bencana' in text:
-        return 'Negative'
-    elif 'siaga' in text or 'antisipasi' in text or 'selamat' in text:
-        return 'Neutral'
-    elif 'aman' in text or 'berhasil' in text or 'selamat' in text:
-        return 'Positive'
-    else:
-        return 'Neutral'
 
 def run_random_forest(df, text_column='cleaned_content', label_column='sentiment_label', output_prefix='rf'):
     if text_column not in df.columns or label_column not in df.columns:
@@ -85,15 +45,12 @@ def run_random_forest(df, text_column='cleaned_content', label_column='sentiment
     plt.close()
 
 if __name__ == "__main__":
-    print("Memuat dan menggabungkan data dari final_data...")
-    df = load_and_prepare_data(DATA_DIR)
+    print(f"Membaca data dari {LABELLED_PATH} ...")
+    df = pd.read_csv(LABELLED_PATH)
     print(f"Total data: {len(df)}")
     if len(df) == 0:
         print("Tidak ada data yang bisa diproses.")
         exit()
-    print("Melakukan pelabelan sentimen otomatis (rule-based)...")
-    df['sentiment_label'] = df['cleaned_content'].apply(label_sentiment_rule_based)
-    df.to_csv(os.path.join(OUTPUT_DIR, 'labelled_final_data.csv'), index=False)
     print("Training dan evaluasi Random Forest...")
     run_random_forest(df, output_prefix='rf')
-    print(f"Hasil evaluasi dan data labelled disimpan di folder {OUTPUT_DIR}")
+    print(f"Hasil evaluasi disimpan di folder {OUTPUT_DIR}")
