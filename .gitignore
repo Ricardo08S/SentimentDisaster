@@ -5,3 +5,4 @@ __pycache__
 *.py[cod]
 venv
 poetry.lock
+random_forest/output_rf
