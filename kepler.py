@@ -1,89 +1,80 @@
 import pandas as pd
-import requests
-import time
-import json
-from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+import geopandas as gpd
+import glob
+import os
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
-CSV_PATH = "labeled_sentiment_data_unified.csv"
-OUTPUT = "articles_kepler.geojson"
+folder_path = './'
+file_pattern = folder_path + 'filtered_processed_*.csv'
+all_files = glob.glob(file_pattern)
 
-# ---- Load a PUBLIC Indonesian NER model ----
-ner_model = "indolem/indolem-ner"
+print(f"Found {len(all_files)} files to process.")
 
-tokenizer = AutoTokenizer.from_pretrained(ner_model)
-model = AutoModelForTokenClassification.from_pretrained(ner_model)
+dfs = []
 
-ner = pipeline(
-    "ner",
-    model=model,
-    tokenizer=tokenizer,
-    aggregation_strategy="simple"
-)
+for filepath in all_files:
+    filename = os.path.basename(filepath)
+    parts = filename.replace('.csv', '').split('_')
+    
+    if len(parts) >= 5:
+        location_from_file = parts[2]
+        disaster_type = parts[3]
+        news_source = parts[4]
+        
+        try:
+            df_temp = pd.read_csv(filepath)
+            
+            df_temp['location_name'] = location_from_file
+            df_temp['disaster_type'] = disaster_type
+            df_temp['news_source'] = news_source
+                        
+            dfs.append(df_temp)
+            print(f"  > Merged: {location_from_file} | {disaster_type}")
+            
+        except Exception as e:
+            print(f"  > Error reading {filename}: {e}")
 
-# ---- Clean place names ----
-def clean_location_name(loc):
-    return (
-        loc.replace("Kab.", "Kabupaten")
-           .replace("Kota ", "")
-           .replace("Prop.", "Provinsi")
-           .strip()
+if not dfs:
+    print("❌ No valid files found. Please check your folder path.")
+else:
+    master_df = pd.concat(dfs, ignore_index=True)
+    print(f"\n✅ Merged Dataset: {len(master_df)} total rows.")
+
+    print("\nStarting Geocoding...")
+    
+    geolocator = Nominatim(user_agent="bali_disaster_thesis_final")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+    
+    unique_locations = master_df['location_name'].unique()
+    location_cache = {}
+    
+    print(f"Geocoding {len(unique_locations)} unique locations...")
+    
+    for loc in unique_locations:
+        try:
+            location_data = geocode(f"{loc}, Bali, Indonesia")
+            if location_data:
+                location_cache[loc] = (location_data.latitude, location_data.longitude)
+                print(f"  > Found: {loc} -> {location_data.latitude}, {location_data.longitude}")
+            else:
+                print(f"  > Not Found: {loc}")
+                location_cache[loc] = (None, None)
+        except:
+            location_cache[loc] = (None, None)
+            
+    master_df['coordinates'] = master_df['location_name'].map(location_cache)
+    master_df[['latitude', 'longitude']] = pd.DataFrame(master_df['coordinates'].tolist(), index=master_df.index)
+    
+    final_df = master_df.dropna(subset=['latitude', 'longitude'])
+    
+    print(f"\nCreating GeoJSON with {len(final_df)} points...")
+    
+    gdf = gpd.GeoDataFrame(
+        final_df, geometry=gpd.points_from_xy(final_df.longitude, final_df.latitude)
     )
-
-# ---- Geocode ----
-def geocode_place(place):
-    place = clean_location_name(place)
-    url = f"https://nominatim.openstreetmap.org/search?q={place}&format=json&countrycodes=id&limit=1"
-    time.sleep(1)  # API rate limit
-    r = requests.get(url, headers={"User-Agent": "KeplerMapper/1.0"})
-    data = r.json()
-    if len(data) == 0:
-        return None
-    return float(data[0]["lat"]), float(data[0]["lon"])
-
-# ---- Load your CSV ----
-df = pd.read_csv(CSV_PATH)
-
-features = []
-
-for idx, row in df.iterrows():
-    text = row["text"]
-    sentiment = row["sentiment_label"]
-
-    # Extract NER entities
-    ents = ner(text)
-
-    # Only location entities
-    locs = [e["word"] for e in ents if e["entity_group"] == "LOC"]
-
-    if len(locs) == 0:
-        continue
-
-    for loc in locs:
-        coords = geocode_place(loc)
-        if coords is None:
-            continue
-
-        lat, lon = coords
-
-        feature = {
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lon, lat]
-            },
-            "properties": {
-                "article_text": text[:200] + "...",
-                "location": loc,
-                "sentiment": sentiment
-            }
-        }
-
-        features.append(feature)
-
-# ---- Save GeoJSON ----
-geojson = {"type": "FeatureCollection", "features": features}
-
-with open(OUTPUT, "w") as f:
-    json.dump(geojson, f, indent=2)
-
-print("Saved to", OUTPUT)
+    
+    output_path = folder_path + 'final_disaster_map.geojson'
+    gdf.to_file(output_path, driver='GeoJSON')
+    
+    print(f"\nSUCCESS! Download your map file here: {output_path}")
