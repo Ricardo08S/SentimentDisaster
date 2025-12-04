@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 # -----------------------------
 # 1. LOAD LABELED DATA
 # -----------------------------
-df = pd.read_csv("labeled_sentiment_data_ric.csv")
+df = pd.read_csv("labeled_sentiment_data_unified.csv")
 
 text_col = "cleaned_content"
 label_col = "sentiment_label"
