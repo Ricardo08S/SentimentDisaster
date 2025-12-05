@@ -12,11 +12,11 @@ from sklearn.svm import SVC
 from sklearn.metrics import classification_report, accuracy_score
 import joblib
 
-API_KEY = "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" 
+API_KEY = "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"
 
-INPUT_FOLDER = './' 
-OUTPUT_FILE = 'labeled_sentiment_data.csv'
-MODEL_FILE = 'svm_sentiment_model.pkl'
+INPUT_FOLDER = './unified' 
+OUTPUT_FILE = 'labeled_sentiment_data_unified.csv'
+MODEL_FILE = 'svm_sentiment_model_unified.pkl'
 
 def get_llm_label(text):
     """
@@ -76,7 +76,7 @@ def get_llm_label(text):
         return None
 
 print("--- PHASE 1: Loading & Merging Data ---")
-all_files = glob.glob(os.path.join(INPUT_FOLDER, "filtered_processed_*.csv"))
+all_files = glob.glob(os.path.join(INPUT_FOLDER, "processed_*.csv"))
 dfs = []
 
 for filename in all_files:
@@ -142,4 +142,4 @@ print(classification_report(y_test, predictions))
 
 joblib.dump(svm_student, MODEL_FILE)
 joblib.dump(vectorizer, 'tfidf_vectorizer.pkl')
-print("✅ Done! Student model saved.")
+print("Done! Student model saved.")

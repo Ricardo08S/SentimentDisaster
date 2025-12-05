@@ -1,80 +1,120 @@
 import pandas as pd
 import geopandas as gpd
-import glob
-import os
+from shapely.geometry import Point
+from location_extractor import extract_locations
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+import time
 
-folder_path = './'
-file_pattern = folder_path + 'filtered_processed_*.csv'
-all_files = glob.glob(file_pattern)
+# --------------------------
+# INITIAL SETUP
+# --------------------------
 
-print(f"Found {len(all_files)} files to process.")
+INPUT_FILE = "labeled_sentiment_data_unified.csv"
+CSV_OUTPUT = "geocoded_disasters.csv"
+GEOJSON_OUTPUT = "final_disaster_map.geojson"
 
-dfs = []
+print("📌 Loading unified dataset...")
+df = pd.read_csv(INPUT_FILE)
+print(f"Loaded {len(df)} rows.")
 
-for filepath in all_files:
-    filename = os.path.basename(filepath)
-    parts = filename.replace('.csv', '').split('_')
-    
-    if len(parts) >= 5:
-        location_from_file = parts[2]
-        disaster_type = parts[3]
-        news_source = parts[4]
-        
-        try:
-            df_temp = pd.read_csv(filepath)
-            
-            df_temp['location_name'] = location_from_file
-            df_temp['disaster_type'] = disaster_type
-            df_temp['news_source'] = news_source
-                        
-            dfs.append(df_temp)
-            print(f"  > Merged: {location_from_file} | {disaster_type}")
-            
-        except Exception as e:
-            print(f"  > Error reading {filename}: {e}")
+# Required for your dataset
+required_cols = ["cleaned_content", "sentiment_label", "keyword"]
+for col in required_cols:
+    if col not in df.columns:
+        raise ValueError(f"❌ Missing column: {col}")
 
-if not dfs:
-    print("❌ No valid files found. Please check your folder path.")
-else:
-    master_df = pd.concat(dfs, ignore_index=True)
-    print(f"\n✅ Merged Dataset: {len(master_df)} total rows.")
+# --------------------------
+# GEOCODING SETUP
+# --------------------------
 
-    print("\nStarting Geocoding...")
-    
-    geolocator = Nominatim(user_agent="bali_disaster_thesis_final")
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
-    
-    unique_locations = master_df['location_name'].unique()
-    location_cache = {}
-    
-    print(f"Geocoding {len(unique_locations)} unique locations...")
-    
-    for loc in unique_locations:
-        try:
-            location_data = geocode(f"{loc}, Bali, Indonesia")
-            if location_data:
-                location_cache[loc] = (location_data.latitude, location_data.longitude)
-                print(f"  > Found: {loc} -> {location_data.latitude}, {location_data.longitude}")
-            else:
-                print(f"  > Not Found: {loc}")
-                location_cache[loc] = (None, None)
-        except:
-            location_cache[loc] = (None, None)
-            
-    master_df['coordinates'] = master_df['location_name'].map(location_cache)
-    master_df[['latitude', 'longitude']] = pd.DataFrame(master_df['coordinates'].tolist(), index=master_df.index)
-    
-    final_df = master_df.dropna(subset=['latitude', 'longitude'])
-    
-    print(f"\nCreating GeoJSON with {len(final_df)} points...")
-    
-    gdf = gpd.GeoDataFrame(
-        final_df, geometry=gpd.points_from_xy(final_df.longitude, final_df.latitude)
-    )
-    
-    output_path = folder_path + 'final_disaster_map.geojson'
-    gdf.to_file(output_path, driver='GeoJSON')
-    
-    print(f"\n✅ SUCCESS! Download your map file here: {output_path}")
+geolocator = Nominatim(user_agent="bali-disaster-geocoder")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+
+def geocode_location(location_name):
+    """Try geocoding with Bali context."""
+    try:
+        result = geocode(f"{location_name}, Bali, Indonesia")
+        if result:
+            return result.latitude, result.longitude, location_name
+    except:
+        pass
+    return None, None, None
+
+# --------------------------
+# LOCATION SELECTION LOGIC
+# --------------------------
+
+def choose_best_location(row):
+    """
+    1. Use detected article location
+    2. Else use kabupaten name from keyword column (2nd word)
+    3. Else fallback to Bali
+    """
+    # (1) Extract article-based locations
+    article_locs = extract_locations(row["cleaned_content"])
+
+    if article_locs:
+        return article_locs[0]
+
+    # (2) Keyword fallback
+    kw = str(row["keyword"]).strip().split()
+    if len(kw) >= 2:
+        kabupaten = kw[1]          # second word
+        return kabupaten
+
+    # (3) Hard fallback (should rarely happen)
+    return "Bali"
+
+# --------------------------
+# PROCESS EACH ROW
+# --------------------------
+
+lat_list, lon_list, detected_list = [], [], []
+
+for idx, row in df.iterrows():
+    print(f"\n🔍 Row {idx}/{len(df)}")
+
+    best_loc = choose_best_location(row)
+    print(f"📌 Final chosen location: {best_loc}")
+
+    lat, lon, final_loc = geocode_location(best_loc)
+
+    lat_list.append(lat)
+    lon_list.append(lon)
+    detected_list.append(final_loc)
+
+# --------------------------
+# MERGE RESULTS BACK
+# --------------------------
+
+df["detected_location"] = detected_list
+df["lat"] = lat_list
+df["lon"] = lon_list
+
+df.to_csv(CSV_OUTPUT, index=False)
+print(f"\n✅ Saved geocoded CSV → {CSV_OUTPUT}")
+
+# --------------------------
+# CREATE GEOJSON
+# --------------------------
+
+filtered = df.dropna(subset=["lat", "lon"])
+
+gdf = gpd.GeoDataFrame(
+    filtered,
+    geometry=[Point(xy) for xy in zip(filtered.lon, filtered.lat)],
+    crs="EPSG:4326"
+)
+
+properties_to_keep = [
+    "sentiment_label",
+    "cleaned_content",
+    "keyword",
+    "detected_location",
+] + [col for col in df.columns if col not in ["lat", "lon", "geometry"]]
+
+gdf[properties_to_keep + ["geometry"]].to_file(GEOJSON_OUTPUT, driver="GeoJSON")
+
+print(f"🌍 GeoJSON exported → {GEOJSON_OUTPUT}")
+print("🎉 All done!")
